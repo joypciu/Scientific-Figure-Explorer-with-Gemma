@@ -16,6 +16,8 @@ if 'processing_complete' not in st.session_state:
     st.session_state.processing_complete = False
 if 'qa_chain' not in st.session_state:
     st.session_state.qa_chain = None
+if 'think_mode' not in st.session_state:
+    st.session_state.think_mode = False  # Default to non-thinking mode
 
 # Set device to CPU (Streamlit Cloud doesn't support GPU in free tier)
 device = "cpu"
@@ -55,7 +57,7 @@ def load_llm(think_mode=True):
             temperature = 0.7
             top_p = 0.8
             top_k = 20
-            max_new_tokens = 256  # Reduced for speed
+            max_new_tokens = 200  # Further reduced for speed
         
         # Create a pipeline for text generation
         pipe = pipeline(
@@ -138,8 +140,8 @@ def process_documents(uploaded_files):
     
     # Split documents into smaller chunks for processing
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=400 if st.session_state.get('think_mode', False) else 300,  # Smaller chunks for non-thinking
-        chunk_overlap=80,  # Reduced overlap for speed
+        chunk_size=400 if st.session_state.think_mode else 250,  # Smaller chunks for non-thinking
+        chunk_overlap=50,  # Further reduced overlap for speed
         length_function=len
     )
     chunks = text_splitter.split_documents(documents)
@@ -206,7 +208,7 @@ def clean_answer(raw_answer):
     return cleaned
 
 # Streamlit UI
-st.title("Document Q&A with RAG")
+st.title("Document Q&A with RAG By Usman Joy")
 st.write("Upload PDF or text files and ask questions about their content.")
 
 # File uploader
@@ -220,7 +222,7 @@ mode = st.radio(
     help="Thinking Mode uses reasoning for detailed responses (e.g., summarization). Non-Thinking Mode provides faster, direct answers."
 )
 think_mode = mode == "Thinking Mode"
-st.session_state.think_mode = think_mode  # Store for chunk size adjustment
+st.session_state.think_mode = think_mode  # Store for chunk size and RAG chain
 
 # Process files and create RAG chain
 if uploaded_files:
