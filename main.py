@@ -190,7 +190,7 @@ query = st.text_input(
 if st.button("Get Answer", disabled=not st.session_state.processing_complete):
     with st.spinner("Generating answer..."):
         try:
-            result = st.session_state.qa_chain({"query": query})
+            result = st.session_state.qa_chain.invoke({"query": query})
             st.write("**Answer:**")
             st.write(result["result"])
             st.write("**Source Documents:**")
