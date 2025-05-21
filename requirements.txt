@@ -5,6 +5,5 @@ torch >=2.7.0
 transformers >=4.52.2
 sentence-transformers >=3.2.1
 streamlit >= 1.45.1
-chromadb >=0.5.15
 pypdf >=5.5.0
-protobuf >=3.20.3
+faiss-cpu >=1.11.0

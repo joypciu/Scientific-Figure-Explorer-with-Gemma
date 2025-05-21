@@ -1,20 +1,21 @@
 # Import necessary libraries
 import os
 import torch
-import google.protobuf
-import chromadb
 from langchain_community.llms import HuggingFacePipeline
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
+from langchain_community.vectorstores import FAISS  # Replaced Chroma with FAISS
 from langchain.chains import RetrievalQA
 from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
 import streamlit as st
 
-# Debug: Log dependency versions
-print(f"DEBUG: Protobuf version: {google.protobuf.__version__}")
-print(f"DEBUG: Chromadb version: {chromadb.__version__}")
+# Debug: Log key package versions
+try:
+    import faiss
+    print(f"DEBUG: FAISS version: {faiss.__version__}")
+except AttributeError:
+    print("DEBUG: FAISS version not directly accessible")
 print(f"DEBUG: Torch version: {torch.__version__}")
 
 # Set device (CUDA if available, otherwise CPU)
@@ -94,7 +95,7 @@ def process_documents(file_paths):
 
 # Function to create vector store from document chunks
 def create_vector_store(chunks):
-    print("DEBUG: Creating vector store...")
+    print("DEBUG: Creating vector store with FAISS...")
     try:
         # Initialize embedding model
         embeddings = HuggingFaceEmbeddings(
@@ -103,13 +104,12 @@ def create_vector_store(chunks):
         )
         print("DEBUG: Embeddings initialized")
         
-        # Create vector store from documents
-        vector_store = Chroma.from_documents(
+        # Create FAISS vector store from documents
+        vector_store = FAISS.from_documents(
             documents=chunks,
-            embedding=embeddings,
-            persist_directory="./chroma_db"
+            embedding=embeddings
         )
-        print("DEBUG: Vector store created successfully")
+        print("DEBUG: FAISS vector store created successfully")
         return vector_store
     except Exception as e:
         print(f"DEBUG: Error creating vector store: {str(e)}")
