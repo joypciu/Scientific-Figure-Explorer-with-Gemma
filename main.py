@@ -25,10 +25,13 @@ MODEL_NAME = "Qwen/Qwen3-0.6B"  # Qwen3-0.6B for text generation
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"  # Embedding model
 
 @st.cache_resource  # Cache model to avoid reloading
-def load_llm():
+def load_llm(think_mode=True):
     """
     Load the Qwen3-0.6B model and create a text generation pipeline.
-    Returns a HuggingFacePipeline object for LangChain.
+    Args:
+        think_mode: Boolean to enable thinking (True) or non-thinking (False) mode
+    Returns:
+        HuggingFacePipeline object for LangChain
     """
     try:
         # Load tokenizer and model from Hugging Face
@@ -39,15 +42,27 @@ def load_llm():
             device_map="auto",  # Map to CPU
             trust_remote_code=True
         )
-        # Create a pipeline for text generation with Qwen3 settings
+        # Set sampling parameters based on mode
+        if think_mode:
+            # Thinking mode parameters (per Qwen3 documentation)
+            temperature = 0.6
+            top_p = 0.95
+            top_k = 20
+        else:
+            # Non-thinking mode parameters
+            temperature = 0.7
+            top_p = 0.8
+            top_k = 20
+        
+        # Create a pipeline for text generation
         pipe = pipeline(
             "text-generation",
             model=model,
             tokenizer=tokenizer,
             max_new_tokens=512,  # Increased for summarization
-            temperature=0.6,  # Recommended for thinking mode
-            top_p=0.95,  # Recommended for thinking mode
-            top_k=20,  # Recommended for thinking mode
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
             repetition_penalty=1.5,  # Prevent repetitions
             do_sample=True,  # Enable sampling (no greedy decoding)
             return_full_text=False  # Exclude input prompt from output
@@ -128,11 +143,12 @@ def process_documents(uploaded_files):
     st.write(f"Split {len(documents)} documents into {len(chunks)} chunks")
     return chunks
 
-def create_rag_chain(vector_store):
+def create_rag_chain(vector_store, think_mode=True):
     """
     Create a Retrieval-Augmented Generation (RAG) chain.
     Args:
         vector_store: FAISS vector store for document retrieval
+        think_mode: Boolean to enable thinking (True) or non-thinking (False) mode
     Returns:
         RetrievalQA chain object
     """
@@ -147,7 +163,7 @@ def create_rag_chain(vector_store):
         )
         # Create RAG chain combining retriever and LLM
         qa_chain = RetrievalQA.from_chain_type(
-            llm=load_llm(),
+            llm=load_llm(think_mode=think_mode),
             chain_type="stuff",  # Combine retrieved chunks into context
             retriever=retriever,
             return_source_documents=True  # Include source documents in output
@@ -193,13 +209,21 @@ st.write("Upload PDF or text files and ask questions about their content.")
 # File uploader
 uploaded_files = st.file_uploader("Upload documents", type=["pdf", "txt"], accept_multiple_files=True)
 
+# Mode selection
+mode = st.radio(
+    "Select Response Mode:",
+    ["Thinking Mode", "Non-Thinking Mode"],
+    help="Thinking Mode uses reasoning for detailed responses (e.g., summarization). Non-Thinking Mode provides faster, direct answers."
+)
+think_mode = mode == "Thinking Mode"
+
 # Process files and create RAG chain
 if uploaded_files:
     with st.spinner("Processing documents..."):
         chunks = process_documents(uploaded_files)
         if chunks:
             vector_store = create_vector_store(chunks)
-            qa_chain = create_rag_chain(vector_store)
+            qa_chain = create_rag_chain(vector_store, think_mode=think_mode)
             if qa_chain:
                 st.session_state.qa_chain = qa_chain
                 st.session_state.processing_complete = True
@@ -223,14 +247,14 @@ query = st.text_input(
 if st.button("Get Answer", disabled=not st.session_state.processing_complete):
     with st.spinner("Generating answer..."):
         try:
-            # Format query for Qwen3 thinking mode
-            messages = [{"role": "user", "content": query + " /think"}]
+            # Format query for Qwen3
+            messages = [{"role": "user", "content": query + (" /think" if think_mode else " /no_think")}]
             tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
             text = tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
                 add_generation_prompt=True,
-                enable_thinking=True
+                enable_thinking=think_mode
             )
             result = st.session_state.qa_chain.invoke({"query": text})
             cleaned_answer = clean_answer(result["result"])
