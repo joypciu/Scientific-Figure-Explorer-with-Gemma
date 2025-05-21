@@ -1,15 +1,14 @@
 # Import necessary libraries
 import os
 import torch
-from langchain.llms import HuggingFacePipeline
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.document_loaders import PyPDFLoader, TextLoader
+from langchain_community.llms import HuggingFacePipeline
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import Chroma
+from langchain_community.vectorstores import Chroma
 from langchain.chains import RetrievalQA
 from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
 import streamlit as st
-
 
 # Set device (CUDA if available, otherwise CPU)
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -69,7 +68,6 @@ def process_documents(file_paths):
     chunks = text_splitter.split_documents(documents)
     print(f"Split {len(documents)} documents into {len(chunks)} chunks")
     return chunks
-
 
 # Function to create vector store from document chunks
 def create_vector_store(chunks):
@@ -159,7 +157,7 @@ def main():
         accept_multiple_files=True
     )
 
-    about_rag()  # Add this line
+    about_rag()
     
     # Process uploaded files
     if uploaded_files:
@@ -230,7 +228,6 @@ def main():
                     
                     # Add assistant response to chat history
                     st.session_state.messages.append({"role": "assistant", "content": answer})
-        
 
 if __name__ == "__main__":
     main()
