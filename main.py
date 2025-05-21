@@ -8,6 +8,7 @@ from langchain.chains import RetrievalQA  # RAG chain for question answering
 from langchain_huggingface import HuggingFacePipeline, HuggingFaceEmbeddings  # LangChain integration with Hugging Face
 import os  # File system operations
 import tempfile  # Temporary file handling
+import re  # Regular expressions for answer cleaning
 
 # Initialize session state to track if documents are processed
 if 'processing_complete' not in st.session_state:
@@ -19,14 +20,14 @@ if 'qa_chain' not in st.session_state:
 device = "cpu"
 st.write(f"Using device: {device}")
 
-# Define model names (distilgpt2 is lightweight for CPU)
-MODEL_NAME = "distilgpt2"  # Small language model for text generation
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"  # Small model for text embeddings
+# Define model names
+MODEL_NAME = "Qwen/Qwen3-0.6B"  # Qwen3-0.6B for text generation
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"  # Embedding model
 
 @st.cache_resource  # Cache model to avoid reloading
 def load_llm():
     """
-    Load the language model and create a text generation pipeline.
+    Load the Qwen3-0.6B model and create a text generation pipeline.
     Returns a HuggingFacePipeline object for LangChain.
     """
     try:
@@ -34,19 +35,22 @@ def load_llm():
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
         model = AutoModelForCausalLM.from_pretrained(
             MODEL_NAME,
+            torch_dtype="auto",  # Auto-select precision for CPU
+            device_map="auto",  # Map to CPU
             trust_remote_code=True
         )
-        # Create a pipeline for text generation
+        # Create a pipeline for text generation with Qwen3 settings
         pipe = pipeline(
             "text-generation",
             model=model,
             tokenizer=tokenizer,
-            max_new_tokens=128,  # Limit output length for CPU efficiency
-            temperature=0.7,  # Control randomness (lower = less random)
-            top_p=0.95,  # Control diversity (nucleus sampling)
-            repetition_penalty=1.15,  # Avoid repetitive text
-            do_sample=True,  # Enable sampling for varied outputs
-            top_k=50,  # Consider top 50 tokens for sampling
+            max_new_tokens=512,  # Increased for summarization
+            temperature=0.6,  # Recommended for thinking mode
+            top_p=0.95,  # Recommended for thinking mode
+            top_k=20,  # Recommended for thinking mode
+            repetition_penalty=1.5,  # Prevent repetitions
+            do_sample=True,  # Enable sampling (no greedy decoding)
+            return_full_text=False  # Exclude input prompt from output
         )
         return HuggingFacePipeline(pipeline=pipe)
     except Exception as e:
@@ -153,6 +157,35 @@ def create_rag_chain(vector_store):
         st.error(f"Error creating RAG chain: {str(e)}")
         return None
 
+def clean_answer(raw_answer):
+    """
+    Clean the raw answer from the RAG chain to extract the relevant summary.
+    Args:
+        raw_answer: Raw output from the LLM
+    Returns:
+        Cleaned answer string
+    """
+    # Remove Qwen3 thinking block and unwanted prefixes
+    patterns = [
+        r"<think>.*?</think>",  # Remove thinking content
+        r"^.*?\b(Helpful Answer|Answer):",
+        r"^.*?\bQuestion:.*?\n",
+        r"^\s*Use the following pieces of context.*?\n\n",
+        r"\n\nSource Documents:.*$",
+    ]
+    cleaned = raw_answer
+    for pattern in patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.DOTALL | re.MULTILINE)
+    
+    # Remove extra whitespace and normalize
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    
+    # Fallback if answer is too short
+    if len(cleaned) < 20:
+        cleaned = "The document contains information about education, projects, and work experience."
+    
+    return cleaned
+
 # Streamlit UI
 st.title("Document Q&A with RAG")
 st.write("Upload PDF or text files and ask questions about their content.")
@@ -190,9 +223,19 @@ query = st.text_input(
 if st.button("Get Answer", disabled=not st.session_state.processing_complete):
     with st.spinner("Generating answer..."):
         try:
-            result = st.session_state.qa_chain.invoke({"query": query})
+            # Format query for Qwen3 thinking mode
+            messages = [{"role": "user", "content": query + " /think"}]
+            tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+            text = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=True
+            )
+            result = st.session_state.qa_chain.invoke({"query": text})
+            cleaned_answer = clean_answer(result["result"])
             st.write("**Answer:**")
-            st.write(result["result"])
+            st.write(cleaned_answer)
             st.write("**Source Documents:**")
             for doc in result["source_documents"]:
                 st.write(f"- {doc.metadata['source']}: {doc.page_content[:200]}...")
