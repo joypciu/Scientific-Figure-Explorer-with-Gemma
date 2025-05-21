@@ -9,6 +9,7 @@ from langchain_huggingface import HuggingFacePipeline, HuggingFaceEmbeddings  # 
 import os  # File system operations
 import tempfile  # Temporary file handling
 import re  # Regular expressions for answer cleaning
+import time  # For tracking response time
 
 # Initialize session state to track if documents are processed
 if 'processing_complete' not in st.session_state:
@@ -44,22 +45,24 @@ def load_llm(think_mode=True):
         )
         # Set sampling parameters based on mode
         if think_mode:
-            # Thinking mode parameters (per Qwen3 documentation)
+            # Thinking mode: Detailed reasoning
             temperature = 0.6
             top_p = 0.95
             top_k = 20
+            max_new_tokens = 512
         else:
-            # Non-thinking mode parameters
+            # Non-thinking mode: Faster, direct responses
             temperature = 0.7
             top_p = 0.8
             top_k = 20
+            max_new_tokens = 256  # Reduced for speed
         
         # Create a pipeline for text generation
         pipe = pipeline(
             "text-generation",
             model=model,
             tokenizer=tokenizer,
-            max_new_tokens=512,  # Increased for summarization
+            max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
@@ -135,8 +138,8 @@ def process_documents(uploaded_files):
     
     # Split documents into smaller chunks for processing
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,  # Small chunks for CPU efficiency
-        chunk_overlap=100,  # Overlap to maintain context
+        chunk_size=400 if st.session_state.get('think_mode', False) else 300,  # Smaller chunks for non-thinking
+        chunk_overlap=80,  # Reduced overlap for speed
         length_function=len
     )
     chunks = text_splitter.split_documents(documents)
@@ -156,10 +159,10 @@ def create_rag_chain(vector_store, think_mode=True):
         st.error("Vector store not initialized.")
         return None
     try:
-        # Create retriever to find relevant document chunks
+        # Create retriever with mode-specific settings
         retriever = vector_store.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": 3}  # Return top 3 relevant chunks
+            search_kwargs={"k": 3 if think_mode else 2}  # Fewer chunks for non-thinking
         )
         # Create RAG chain combining retriever and LLM
         qa_chain = RetrievalQA.from_chain_type(
@@ -209,13 +212,15 @@ st.write("Upload PDF or text files and ask questions about their content.")
 # File uploader
 uploaded_files = st.file_uploader("Upload documents", type=["pdf", "txt"], accept_multiple_files=True)
 
-# Mode selection
+# Mode selection (Non-Thinking Mode as default)
 mode = st.radio(
     "Select Response Mode:",
     ["Thinking Mode", "Non-Thinking Mode"],
+    index=1,  # Default to Non-Thinking Mode
     help="Thinking Mode uses reasoning for detailed responses (e.g., summarization). Non-Thinking Mode provides faster, direct answers."
 )
 think_mode = mode == "Thinking Mode"
+st.session_state.think_mode = think_mode  # Store for chunk size adjustment
 
 # Process files and create RAG chain
 if uploaded_files:
@@ -246,19 +251,28 @@ query = st.text_input(
 )
 if st.button("Get Answer", disabled=not st.session_state.processing_complete):
     with st.spinner("Generating answer..."):
+        start_time = time.time()
         try:
-            # Format query for Qwen3
-            messages = [{"role": "user", "content": query + (" /think" if think_mode else " /no_think")}]
+            # Format query with system prompt for Qwen3
+            system_prompt = (
+                "You are a helpful assistant for summarizing and answering questions about documents. "
+                f"Use {'/think' if think_mode else '/no_think'} mode to process the query."
+            )
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": query}
+            ]
             tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
             text = tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
                 add_generation_prompt=True,
-                enable_thinking=think_mode
+                enable_thinking=think_mode  # Explicitly set mode
             )
             result = st.session_state.qa_chain.invoke({"query": text})
             cleaned_answer = clean_answer(result["result"])
-            st.write("**Answer:**")
+            response_time = time.time() - start_time
+            st.write(f"**Answer (generated in {response_time:.2f} seconds):**")
             st.write(cleaned_answer)
             st.write("**Source Documents:**")
             for doc in result["source_documents"]:
