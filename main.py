@@ -1,8 +1,8 @@
 # Import necessary libraries
 import os
-os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"  # Fallback for protobuf compatibility
 import torch
 import google.protobuf
+import chromadb
 from langchain_community.llms import HuggingFacePipeline
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
@@ -12,9 +12,10 @@ from langchain.chains import RetrievalQA
 from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
 import streamlit as st
 
-# Debug: Log protobuf version and environment
+# Debug: Log dependency versions
 print(f"DEBUG: Protobuf version: {google.protobuf.__version__}")
-print(f"DEBUG: PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: {os.environ.get('PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION', 'Not set')}")
+print(f"DEBUG: Chromadb version: {chromadb.__version__}")
+print(f"DEBUG: Torch version: {torch.__version__}")
 
 # Set device (CUDA if available, otherwise CPU)
 device = "cuda" if torch.cuda.is_available() else "cpu"
