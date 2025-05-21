@@ -1,8 +1,10 @@
 # Import necessary libraries
 import os
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"  # Fallback for protobuf compatibility
 import torch
+import google.protobuf
 from langchain_community.llms import HuggingFacePipeline
-from langchain_huggingface import HuggingFaceEmbeddings  # Updated import
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
@@ -10,9 +12,13 @@ from langchain.chains import RetrievalQA
 from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
 import streamlit as st
 
+# Debug: Log protobuf version and environment
+print(f"DEBUG: Protobuf version: {google.protobuf.__version__}")
+print(f"DEBUG: PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: {os.environ.get('PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION', 'Not set')}")
+
 # Set device (CUDA if available, otherwise CPU)
 device = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"Using device: {device}")
+print(f"DEBUG: Using device: {device}")
 
 # Define paths for models
 MODEL_NAME = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
@@ -21,42 +27,54 @@ EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 # Load TinyLlama model and tokenizer
 @st.cache_resource
 def load_llm():
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-        device_map="auto",
-        trust_remote_code=True
-    )
-    
-    # Create a text generation pipeline
-    pipe = pipeline(
-        "text-generation",
-        model=model,
-        tokenizer=tokenizer,
-        max_new_tokens=512,
-        temperature=0.7,
-        top_p=0.95,
-        repetition_penalty=1.15
-    )
-    
-    # Create LangChain wrapper for HuggingFace pipeline
-    hf_pipe = HuggingFacePipeline(pipeline=pipe)
-    return hf_pipe
+    print("DEBUG: Loading LLM model and tokenizer...")
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_NAME,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+            device_map="auto",
+            trust_remote_code=True
+        )
+        
+        # Create a text generation pipeline
+        pipe = pipeline(
+            "text-generation",
+            model=model,
+            tokenizer=tokenizer,
+            max_new_tokens=512,
+            temperature=0.7,
+            top_p=0.95,
+            repetition_penalty=1.15
+        )
+        
+        # Create LangChain wrapper for HuggingFace pipeline
+        hf_pipe = HuggingFacePipeline(pipeline=pipe)
+        print("DEBUG: LLM loaded successfully")
+        return hf_pipe
+    except Exception as e:
+        print(f"DEBUG: Error loading LLM: {str(e)}")
+        raise
 
 # Function to load and process documents
 def process_documents(file_paths):
+    print("DEBUG: Processing documents...")
     documents = []
     for file_path in file_paths:
+        print(f"DEBUG: Loading file: {file_path}")
         if file_path.endswith('.pdf'):
             loader = PyPDFLoader(file_path)
         elif file_path.endswith('.txt'):
             loader = TextLoader(file_path)
         else:
-            print(f"Unsupported file type: {file_path}")
+            print(f"DEBUG: Unsupported file type: {file_path}")
             continue
         
-        documents.extend(loader.load())
+        try:
+            documents.extend(loader.load())
+        except Exception as e:
+            print(f"DEBUG: Error loading {file_path}: {str(e)}")
+            continue
     
     # Split documents into chunks
     text_splitter = RecursiveCharacterTextSplitter(
@@ -65,46 +83,61 @@ def process_documents(file_paths):
         length_function=len
     )
     
-    chunks = text_splitter.split_documents(documents)
-    print(f"Split {len(documents)} documents into {len(chunks)} chunks")
-    return chunks
+    try:
+        chunks = text_splitter.split_documents(documents)
+        print(f"DEBUG: Split {len(documents)} documents into {len(chunks)} chunks")
+        return chunks
+    except Exception as e:
+        print(f"DEBUG: Error splitting documents: {str(e)}")
+        raise
 
 # Function to create vector store from document chunks
 def create_vector_store(chunks):
-    # Initialize embedding model
-    embeddings = HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL_NAME,
-        model_kwargs={'device': device}
-    )
-    
-    # Create vector store from documents
-    vector_store = Chroma.from_documents(
-        documents=chunks,
-        embedding=embeddings,
-        persist_directory="./chroma_db"
-    )
-    
-    return vector_store
+    print("DEBUG: Creating vector store...")
+    try:
+        # Initialize embedding model
+        embeddings = HuggingFaceEmbeddings(
+            model_name=EMBEDDING_MODEL_NAME,
+            model_kwargs={'device': device}
+        )
+        print("DEBUG: Embeddings initialized")
+        
+        # Create vector store from documents
+        vector_store = Chroma.from_documents(
+            documents=chunks,
+            embedding=embeddings,
+            persist_directory="./chroma_db"
+        )
+        print("DEBUG: Vector store created successfully")
+        return vector_store
+    except Exception as e:
+        print(f"DEBUG: Error creating vector store: {str(e)}")
+        raise
 
 # Function to create RAG chain
 def create_rag_chain(vector_store):
-    llm = load_llm()
-    
-    # Create retrieval chain
-    retriever = vector_store.as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": 3}
-    )
-    
-    # Create QA chain
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=retriever,
-        return_source_documents=True
-    )
-    
-    return qa_chain
+    print("DEBUG: Creating RAG chain...")
+    try:
+        llm = load_llm()
+        
+        # Create retrieval chain
+        retriever = vector_store.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": 3}
+        )
+        
+        # Create QA chain
+        qa_chain = RetrievalQA.from_chain_type(
+            llm=llm,
+            chain_type="stuff",
+            retriever=retriever,
+            return_source_documents=True
+        )
+        print("DEBUG: RAG chain created successfully")
+        return qa_chain
+    except Exception as e:
+        print(f"DEBUG: Error creating RAG chain: {str(e)}")
+        raise
 
 # Add this information to the app
 def about_rag():
@@ -167,25 +200,48 @@ def main():
                 temp_file_paths = []
                 for file in uploaded_files:
                     file_path = f"temp_{file.name}"
-                    with open(file_path, "wb") as f:
-                        f.write(file.getvalue())
-                    temp_file_paths.append(file_path)
+                    print(f"DEBUG: Saving temporary file: {file_path}")
+                    try:
+                        with open(file_path, "wb") as f:
+                            f.write(file.getvalue())
+                        temp_file_paths.append(file_path)
+                    except Exception as e:
+                        print(f"DEBUG: Error saving file {file_path}: {str(e)}")
+                        continue
                 
                 # Process documents
-                chunks = process_documents(temp_file_paths)
+                try:
+                    chunks = process_documents(temp_file_paths)
+                except Exception as e:
+                    st.error(f"Failed to process documents: {str(e)}")
+                    print(f"DEBUG: Document processing failed: {str(e)}")
+                    return
                 
                 # Create vector store
-                vector_store = create_vector_store(chunks)
+                try:
+                    vector_store = create_vector_store(chunks)
+                except Exception as e:
+                    st.error(f"Failed to create vector store: {str(e)}")
+                    print(f"DEBUG: Vector store creation failed: {str(e)}")
+                    return
                 
                 # Create QA chain
-                st.session_state.qa_chain = create_rag_chain(vector_store)
-                
-                st.success(f"Processed {len(chunks)} document chunks!")
+                try:
+                    st.session_state.qa_chain = create_rag_chain(vector_store)
+                    st.success(f"Processed {len(chunks)} document chunks!")
+                except Exception as e:
+                    st.error(f"Failed to create QA chain: {str(e)}")
+                    print(f"DEBUG: QA chain creation failed: {str(e)}")
+                    return
                 
                 # Clean up temporary files
                 for file_path in temp_file_paths:
                     if os.path.exists(file_path):
-                        os.remove(file_path)
+                        try:
+                            os.remove(file_path)
+                            print(f"DEBUG: Removed temporary file: {file_path}")
+                        except Exception as e:
+                            print(f"DEBUG: Error removing file {file_path}: {str(e)}")
     
     # Initialize chat history
     if "messages" not in st.session_state:
@@ -196,38 +252,42 @@ def main():
         with st.chat_message(message["role"]):
             st.write(message["content"])
     
-    # Chat input
-    if prompt := st.chat_input("Ask a question about your documents"):
-        # Add user message to chat history
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        
-        # Display user message
-        with st.chat_message("user"):
-            st.write(prompt)
-        
-        # Check if QA chain exists
-        if "qa_chain" not in st.session_state:
-            with st.chat_message("assistant"):
-                st.write("Please upload documents first!")
-                st.session_state.messages.append({"role": "assistant", "content": "Please upload documents first!"})
-        else:
+    # Chat input (disabled until QA chain is ready)
+    if "qa_chain" not in st.session_state:
+        st.chat_input("Please wait for document processing to complete...", disabled=True)
+        st.info("Please upload documents and wait for processing to complete before asking questions.")
+    else:
+        if prompt := st.chat_input("Ask a question about your documents"):
+            # Add user message to chat history
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            
+            # Display user message
+            with st.chat_message("user"):
+                st.write(prompt)
+            
             # Generate response
             with st.chat_message("assistant"):
                 with st.spinner("Thinking..."):
-                    response = st.session_state.qa_chain({"query": prompt})
-                    answer = response["result"]
-                    sources = response["source_documents"]
-                    
-                    st.write(answer)
-                    
-                    with st.expander("View Sources"):
-                        for i, source in enumerate(sources):
-                            st.write(f"Source {i+1}:")
-                            st.write(source.page_content)
-                            st.write("---")
-                    
-                    # Add assistant response to chat history
-                    st.session_state.messages.append({"role": "assistant", "content": answer})
+                    try:
+                        response = st.session_state.qa_chain({"query": prompt})
+                        answer = response["result"]
+                        sources = response["source_documents"]
+                        
+                        st.write(answer)
+                        
+                        with st.expander("View Sources"):
+                            for i, source in enumerate(sources):
+                                st.write(f"Source {i+1}:")
+                                st.write(source.page_content)
+                                st.write("---")
+                        
+                        # Add assistant response to chat history
+                        st.session_state.messages.append({"role": "assistant", "content": answer})
+                        print("DEBUG: Response generated successfully")
+                    except Exception as e:
+                        st.error(f"Error generating response: {str(e)}")
+                        print(f"DEBUG: Error generating response: {str(e)}")
 
 if __name__ == "__main__":
+    print("DEBUG: Starting main function...")
     main()
