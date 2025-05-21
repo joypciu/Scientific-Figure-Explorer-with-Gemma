@@ -1,9 +1,9 @@
 import streamlit as st  # Web app framework for Python
 import torch  # Machine learning library for tensor operations
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline  # Hugging Face library for LLMs
-from langchain.document_loaders import PyPDFLoader, TextLoader  # Load PDF/text files
+from langchain_community.document_loaders import PyPDFLoader, TextLoader  # Load PDF/text files
 from langchain.text_splitter import RecursiveCharacterTextSplitter  # Split text into chunks
-from langchain.vectorstores import FAISS  # Vector store for similarity search
+from langchain_community.vectorstores import FAISS  # Vector store for similarity search
 from langchain.chains import RetrievalQA  # RAG chain for question answering
 from langchain_huggingface import HuggingFacePipeline, HuggingFaceEmbeddings  # LangChain integration with Hugging Face
 import os  # File system operations
@@ -54,11 +54,11 @@ def load_llm():
         return None
 
 @st.cache_resource  # Cache vector store to avoid recomputing
-def create_vector_store(chunks):
+def create_vector_store(_chunks):
     """
     Create a FAISS vector store from document chunks using embeddings.
     Args:
-        chunks: List of document chunks
+        _chunks: List of document chunks (underscore to bypass Streamlit hashing)
     Returns:
         FAISS vector store object
     """
@@ -70,7 +70,7 @@ def create_vector_store(chunks):
         )
         # Create FAISS vector store (in-memory for Streamlit Cloud)
         vector_store = FAISS.from_documents(
-            documents=chunks,
+            documents=_chunks,
             embedding=embeddings
         )
         return vector_store
