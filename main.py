@@ -18,7 +18,6 @@ logging.basicConfig(level=logging.DEBUG, filename='app.log', filemode='a',
 logger = logging.getLogger(__name__)
 
 # Workaround for Streamlit-PyTorch conflict
-st.set_option('deprecation.showfileUploaderEncoding', False)
 os.environ['STREAMLIT_SERVER_FILE_WATCHER_TYPE'] = 'poll'  # Use polling instead of watchdog
 
 # Initialize session state
@@ -36,7 +35,7 @@ device = "cpu"
 
 # Define model names
 CAPTION_MODEL = "Salesforce/blip-image-captioning-base"
-LLM_MODEL_NAME = "distilgpt2"  # Smaller, more stable model
+LLM_MODEL_NAME = "distilgpt2"
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 @st.cache_resource(max_entries=1)
