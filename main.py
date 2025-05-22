@@ -19,6 +19,8 @@ if 'qa_chain' not in st.session_state:
     st.session_state.qa_chain = None
 if 'last_uploaded_files' not in st.session_state:
     st.session_state.last_uploaded_files = None
+if 'vector_store' not in st.session_state:
+    st.session_state.vector_store = None
 
 # Set device to CPU
 device = "cpu"
@@ -26,7 +28,7 @@ st.write(f"Using device: {device}")
 
 # Define model names
 MODEL_NAME = "distilgpt2"
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-distilroberta-v1"  # Updated embedding model
 
 @st.cache_resource
 def load_llm():
@@ -103,14 +105,18 @@ def process_documents(uploaded_files):
                 os.unlink(tmp_file_path)
                 continue
             
-            documents.extend(loader.load())
+            docs = loader.load()
+            # Add page number to metadata
+            for i, doc in enumerate(docs):
+                doc.metadata['page'] = i + 1
+            documents.extend(docs)
             os.unlink(tmp_file_path)
         except Exception as e:
             st.warning(f"Error processing {uploaded_file.name}: {str(e)}")
     
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,  # Reduced for more focused chunks
-        chunk_overlap=100,  # Reduced for efficiency
+        chunk_size=750,  # Increased for better context
+        chunk_overlap=150,  # Increased for continuity
         length_function=len
     )
     chunks = text_splitter.split_documents(documents)
@@ -127,11 +133,11 @@ def create_rag_chain(vector_store):
     try:
         retriever = vector_store.as_retriever(
             search_type="similarity_score_threshold",
-            search_kwargs={"k": 3, "score_threshold": 0.7}  # Stricter threshold
+            search_kwargs={"k": 4, "score_threshold": 0.6}  # Adjusted for new embedding model
         )
         prompt_template = PromptTemplate(
             input_variables=["context", "question"],
-            template="Use the following context to answer the question concisely in 1-2 sentences. Focus on clarity and relevance. For author-related questions, prioritize information from title pages or copyright notices.\nContext: {context}\nQuestion: {question}\nAnswer: "
+            template="Use the following context to answer the question concisely in 1-2 sentences. For author-related questions, extract the author's name from title pages, copyright notices, or similar sections.\nContext: {context}\nQuestion: {question}\nAnswer: "
         )
         qa_chain = RetrievalQA.from_chain_type(
             llm=load_llm(),
@@ -161,6 +167,7 @@ if uploaded_files and uploaded_files != st.session_state.last_uploaded_files:
             qa_chain = create_rag_chain(vector_store)
             if qa_chain:
                 st.session_state.qa_chain = qa_chain
+                st.session_state.vector_store = vector_store
                 st.session_state.processing_complete = True
                 st.session_state.last_uploaded_files = uploaded_files
                 st.success("Documents processed and RAG chain created!")
@@ -174,6 +181,7 @@ elif not uploaded_files:
     st.session_state.processing_complete = False
     st.session_state.last_uploaded_files = None
     st.session_state.qa_chain = None
+    st.session_state.vector_store = None
     st.info("Please upload at least one document to proceed.")
 
 # Query input
@@ -185,24 +193,38 @@ query = st.text_input(
 if st.button("Get Answer", disabled=not st.session_state.processing_complete):
     with st.spinner("Generating answer..."):
         try:
+            # Prioritize early pages for author queries
+            if "author" in query.lower():
+                docs_with_scores = st.session_state.vector_store.similarity_search_with_score(
+                    query, k=10, filter=lambda x: x.get('page', float('inf')) <= 5
+                )
+                st.write("**Filtered Early Pages (Debug):**")
+                for doc, score in docs_with_scores:
+                    st.write(f"- Page: {doc.metadata.get('page', 'N/A')}, Score: {score:.4f}, Content: {doc.page_content[:200]}...")
+            else:
+                docs_with_scores = st.session_state.vector_store.similarity_search_with_score(query, k=10)
+            
             result = st.session_state.qa_chain.invoke({"query": query})
             st.write("**Answer:**")
             st.write(result["result"].strip())
             st.write("**Source Documents:**")
             for doc in result["source_documents"]:
-                st.write(f"- {doc.metadata['source']}: {doc.page_content[:200]}...")
+                st.write(f"- Page: {doc.metadata.get('page', 'N/A')}, Content: {doc.page_content[:200]}...")
             st.write("**Retrieved Context (Debug):**")
             for doc in result["source_documents"]:
-                st.write(f"- {doc.page_content}")
-            # Log similarity scores for debugging
+                st.write(f"- Page: {doc.metadata.get('page', 'N/A')}, Content: {doc.page_content}")
             st.write("**Similarity Scores (Debug):**")
-            docs_with_scores = st.session_state.qa_chain.retriever.vectorstore.similarity_search_with_score(query, k=5)  # Top 5 for debugging
             for doc, score in docs_with_scores:
-                st.write(f"- Score: {score:.4f}, Content: {doc.page_content[:200]}...")
-            # Fallback: Check for author keywords
+                st.write(f"- Page: {doc.metadata.get('page', 'N/A')}, Score: {score:.4f}, Content: {doc.page_content[:200]}...")
+            # Fallback: Search for Oliver Theobald
             st.write("**Fallback Check (Debug):**")
-            for doc in result["source_documents"]:
-                if "by" in doc.page_content.lower() or "author" in doc.page_content.lower() or "copyright" in doc.page_content.lower():
-                    st.write(f"- Potential author info: {doc.page_content[:200]}...")
+            found_author = False
+            for doc in st.session_state.vector_store.similarity_search(query, k=100):
+                if "Oliver Theobald" in doc.page_content or "by Oliver" in doc.page_content.lower():
+                    st.write(f"- Found author: {doc.page_content[:200]}...")
+                    found_author = True
+                    break
+            if not found_author:
+                st.write("- No chunks found containing 'Oliver Theobald'.")
         except Exception as e:
             st.error(f"Error generating answer: {str(e)}")
