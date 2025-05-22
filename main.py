@@ -1,16 +1,16 @@
-import streamlit as st  # Web app framework for Python
-import torch  # Machine learning library for tensor operations
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline  # Hugging Face library for LLMs
-from langchain_community.document_loaders import PyPDFLoader, TextLoader  # Load PDF/text files
-from langchain.text_splitter import RecursiveCharacterTextSplitter  # Split text into chunks
-from langchain_community.vectorstores import FAISS  # Vector store for similarity search
-from langchain.chains import RetrievalQA  # RAG chain for question answering
-from langchain_huggingface import HuggingFacePipeline, HuggingFaceEmbeddings  # LangChain integration with Hugging Face
-import os  # File system operations
-import tempfile  # Temporary file handling
-from langchain.prompts import PromptTemplate  # Import PromptTemplate
-import shutil  # For clearing temporary directory
-
+import streamlit as st
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain.chains import RetrievalQA
+from langchain_huggingface import HuggingFacePipeline, HuggingFaceEmbeddings
+from langchain.prompts import PromptTemplate
+import os
+import tempfile
+import shutil
+import re
 
 # Initialize session state
 if 'processing_complete' not in st.session_state:
@@ -24,33 +24,28 @@ if 'vector_store' not in st.session_state:
 
 # Set device to CPU
 device = "cpu"
-st.write(f"Using device: {device}")
 
 # Define model names
-MODEL_NAME = "distilgpt2"
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-distilroberta-v1"  # Updated embedding model
+MODEL_NAME = "facebook/opt-350m"  # CPU-friendly, high-quality text generator
+EMBEDDING_MODEL_NAME = "sentence-transformers/multi-qa-mpnet-base-dot-v1"
 
 @st.cache_resource
 def load_llm():
-    """
-    Load the language model and create a text generation pipeline.
-    """
+    """Load the language model and create a text generation pipeline."""
     try:
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-        model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME,
-            trust_remote_code=True
-        )
+        model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, trust_remote_code=True)
         pipe = pipeline(
             "text-generation",
             model=model,
             tokenizer=tokenizer,
-            max_new_tokens=50,
-            temperature=0.6,
+            max_new_tokens=20,
+            temperature=0.7,
             top_p=0.9,
             repetition_penalty=1.2,
             do_sample=True,
-            top_k=40,
+            top_k=50,
+            device=-1  # Ensure CPU usage
         )
         return HuggingFacePipeline(pipeline=pipe)
     except Exception as e:
@@ -58,27 +53,20 @@ def load_llm():
         return None
 
 def create_vector_store(chunks):
-    """
-    Create a FAISS vector store from document chunks using embeddings.
-    """
+    """Create a FAISS vector store from document chunks."""
     try:
         embeddings = HuggingFaceEmbeddings(
             model_name=EMBEDDING_MODEL_NAME,
             model_kwargs={'device': device}
         )
-        vector_store = FAISS.from_documents(
-            documents=chunks,
-            embedding=embeddings
-        )
+        vector_store = FAISS.from_documents(chunks, embeddings)
         return vector_store
     except Exception as e:
         st.error(f"Error creating vector store: {str(e)}")
         return None
 
 def process_documents(uploaded_files):
-    """
-    Process uploaded PDF or text files into document chunks.
-    """
+    """Process uploaded PDF or text files into document chunks."""
     if not uploaded_files:
         st.error("No files uploaded.")
         return []
@@ -106,7 +94,6 @@ def process_documents(uploaded_files):
                 continue
             
             docs = loader.load()
-            # Add page number to metadata
             for i, doc in enumerate(docs):
                 doc.metadata['page'] = i + 1
             documents.extend(docs)
@@ -115,29 +102,26 @@ def process_documents(uploaded_files):
             st.warning(f"Error processing {uploaded_file.name}: {str(e)}")
     
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=750,  # Increased for better context
-        chunk_overlap=150,  # Increased for continuity
+        chunk_size=400,
+        chunk_overlap=80,
         length_function=len
     )
     chunks = text_splitter.split_documents(documents)
-    st.write(f"Split {len(documents)} documents into {len(chunks)} chunks")
     return chunks
 
 def create_rag_chain(vector_store):
-    """
-    Create a Retrieval-Augmented Generation (RAG) chain.
-    """
+    """Create a Retrieval-Augmented Generation (RAG) chain."""
     if vector_store is None:
         st.error("Vector store not initialized.")
         return None
     try:
         retriever = vector_store.as_retriever(
             search_type="similarity_score_threshold",
-            search_kwargs={"k": 4, "score_threshold": 0.6}  # Adjusted for new embedding model
+            search_kwargs={"k": 5, "score_threshold": 0.3}
         )
         prompt_template = PromptTemplate(
             input_variables=["context", "question"],
-            template="Use the following context to answer the question concisely in 1-2 sentences. For author-related questions, extract the author's name from title pages, copyright notices, or similar sections.\nContext: {context}\nQuestion: {question}\nAnswer: "
+            template="Answer the question in 1 sentence based on the context. For author queries, extract the author's name from title pages, bios, or similar sections.\nContext: {context}\nQuestion: {question}\nAnswer: "
         )
         qa_chain = RetrievalQA.from_chain_type(
             llm=load_llm(),
@@ -152,8 +136,8 @@ def create_rag_chain(vector_store):
         return None
 
 # Streamlit UI
-st.title("Document Q&A with RAG")
-st.write("Upload PDF or text files and ask specific questions about their content.")
+st.title("Document Q&A")
+st.write("Upload PDF or text files and ask questions about their content.")
 
 # File uploader
 uploaded_files = st.file_uploader("Upload documents", type=["pdf", "txt"], accept_multiple_files=True)
@@ -170,10 +154,10 @@ if uploaded_files and uploaded_files != st.session_state.last_uploaded_files:
                 st.session_state.vector_store = vector_store
                 st.session_state.processing_complete = True
                 st.session_state.last_uploaded_files = uploaded_files
-                st.success("Documents processed and RAG chain created!")
+                st.success("Documents processed successfully!")
             else:
                 st.session_state.processing_complete = False
-                st.error("Failed to create RAG chain.")
+                st.error("Failed to create question-answering system.")
         else:
             st.session_state.processing_complete = False
             st.error("No valid documents processed.")
@@ -182,49 +166,54 @@ elif not uploaded_files:
     st.session_state.last_uploaded_files = None
     st.session_state.qa_chain = None
     st.session_state.vector_store = None
-    st.info("Please upload at least one document to proceed.")
+    st.info("Please upload at least one document.")
 
 # Query input
 query = st.text_input(
-    "Ask a specific question about the documents (e.g., 'What is the main topic?' or 'Who is the author?'):",
+    "Ask a question about the documents (e.g., 'Who is the author?' or 'What is the main topic?'):",
     value="name of the author",
     disabled=not st.session_state.processing_complete
 )
 if st.button("Get Answer", disabled=not st.session_state.processing_complete):
     with st.spinner("Generating answer..."):
         try:
-            # Prioritize early pages for author queries
+            # Filter for author queries
             if "author" in query.lower():
                 docs_with_scores = st.session_state.vector_store.similarity_search_with_score(
-                    query, k=10, filter=lambda x: x.get('page', float('inf')) <= 5
+                    query, k=10, filter=lambda x: x.get('page', float('inf')) <= 5 and any(keyword in x.get('page_content', '').lower() for keyword in ['by', 'author', 'affiliation', 'email'])
                 )
-                st.write("**Filtered Early Pages (Debug):**")
-                for doc, score in docs_with_scores:
-                    st.write(f"- Page: {doc.metadata.get('page', 'N/A')}, Score: {score:.4f}, Content: {doc.page_content[:200]}...")
             else:
                 docs_with_scores = st.session_state.vector_store.similarity_search_with_score(query, k=10)
             
             result = st.session_state.qa_chain.invoke({"query": query})
+            answer = result["result"].strip()
+            
+            # Dynamic name extraction for author queries
+            if "author" in query.lower():
+                name_pattern = re.compile(r'\b([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)\b')
+                for doc in result["source_documents"]:
+                    if any(keyword in doc.page_content.lower() for keyword in ['by', 'author', 'affiliation', 'email']):
+                        match = name_pattern.search(doc.page_content)
+                        if match and not any(cited in doc.page_content.lower() for cited in ['cite', 'reference', 'et al']):
+                            answer = f"The author of the document is {match.group(1)}."
+                            break
+                else:
+                    answer = "No author name found in the document."
+            
             st.write("**Answer:**")
-            st.write(result["result"].strip())
-            st.write("**Source Documents:**")
-            for doc in result["source_documents"]:
-                st.write(f"- Page: {doc.metadata.get('page', 'N/A')}, Content: {doc.page_content[:200]}...")
-            st.write("**Retrieved Context (Debug):**")
-            for doc in result["source_documents"]:
-                st.write(f"- Page: {doc.metadata.get('page', 'N/A')}, Content: {doc.page_content}")
-            st.write("**Similarity Scores (Debug):**")
-            for doc, score in docs_with_scores:
-                st.write(f"- Page: {doc.metadata.get('page', 'N/A')}, Score: {score:.4f}, Content: {doc.page_content[:200]}...")
-            # Fallback: Search for Oliver Theobald
-            st.write("**Fallback Check (Debug):**")
-            found_author = False
-            for doc in st.session_state.vector_store.similarity_search(query, k=100):
-                if "Oliver Theobald" in doc.page_content or "by Oliver" in doc.page_content.lower():
-                    st.write(f"- Found author: {doc.page_content[:200]}...")
-                    found_author = True
-                    break
-            if not found_author:
-                st.write("- No chunks found containing 'Oliver Theobald'.")
+            st.write(answer)
+            
+            # Debug info for developers
+            with st.expander("Debug Information (For Developers)"):
+                if "author" in query.lower():
+                    st.write("**Filtered Early Pages:**")
+                    for doc, score in docs_with_scores[:5]:
+                        st.write(f"- Page: {doc.metadata.get('page', 'N/A')}, Score: {score:.4f}, Content: {doc.page_content[:150]}...")
+                st.write("**Source Documents:**")
+                for doc in result["source_documents"]:
+                    st.write(f"- Page: {doc.metadata.get('page', 'N/A')}, Content: {doc.page_content[:150]}...")
+                st.write("**Similarity Scores:**")
+                for doc, score in docs_with_scores[:5]:
+                    st.write(f"- Page: {doc.metadata.get('page', 'N/A')}, Score: {score:.4f}, Content: {doc.page_content[:150]}...")
         except Exception as e:
             st.error(f"Error generating answer: {str(e)}")
