@@ -227,8 +227,9 @@ if st.button("Generate Summary", disabled=not st.session_state.processing_comple
             if not context:
                 st.error("No relevant context found for summarization.")
                 logger.error("No relevant context found for summarization.")
-                return
+                pass  # Use 'pass' instead of 'return'
             result = st.session_state.qa_chain.invoke({"query": "Summarize the image content"})
+    
             summary = result["result"].strip()
             
             st.write("**Summary:**")
