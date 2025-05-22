@@ -1,24 +1,22 @@
 import streamlit as st
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
 from langchain_community.vectorstores import FAISS
-from langchain.chains import RetrievalQA
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFacePipeline, HuggingFaceEmbeddings
 from langchain.prompts import PromptTemplate
+from langchain_core.documents import Document
+from PIL import Image
 import os
 import tempfile
-import shutil
-import re
 
 # Initialize session state
 if 'processing_complete' not in st.session_state:
     st.session_state.processing_complete = False
 if 'qa_chain' not in st.session_state:
     st.session_state.qa_chain = None
-if 'last_uploaded_files' not in st.session_state:
-    st.session_state.last_uploaded_files = None
+if 'last_uploaded_image' not in st.session_state:
+    st.session_state.last_uploaded_image = None
 if 'vector_store' not in st.session_state:
     st.session_state.vector_store = None
 
@@ -26,20 +24,30 @@ if 'vector_store' not in st.session_state:
 device = "cpu"
 
 # Define model names
-MODEL_NAME = "facebook/opt-350m"  # CPU-friendly, high-quality text generator
+CAPTION_MODEL = "Salesforce/blip-image-captioning-base"  # Image captioning model
+LLM_MODEL_NAME = "facebook/opt-350m"  # CPU-friendly text generator
 EMBEDDING_MODEL_NAME = "sentence-transformers/multi-qa-mpnet-base-dot-v1"
+
+@st.cache_resource
+def load_captioning_model():
+    """Load the image captioning model."""
+    try:
+        return pipeline("image-to-text", model=CAPTION_MODEL, device=-1)
+    except Exception as e:
+        st.error(f"Error loading captioning model: {str(e)}")
+        return None
 
 @st.cache_resource
 def load_llm():
     """Load the language model and create a text generation pipeline."""
     try:
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-        model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(LLM_MODEL_NAME)
+        model = AutoModelForCausalLM.from_pretrained(LLM_MODEL_NAME, trust_remote_code=True)
         pipe = pipeline(
             "text-generation",
             model=model,
             tokenizer=tokenizer,
-            max_new_tokens=20,
+            max_new_tokens=50,
             temperature=0.7,
             top_p=0.9,
             repetition_penalty=1.2,
@@ -49,7 +57,7 @@ def load_llm():
         )
         return HuggingFacePipeline(pipeline=pipe)
     except Exception as e:
-        st.error(f"Error loading model: {str(e)}")
+        st.error(f"Error loading language model: {str(e)}")
         return None
 
 def create_vector_store(chunks):
@@ -65,63 +73,67 @@ def create_vector_store(chunks):
         st.error(f"Error creating vector store: {str(e)}")
         return None
 
-def process_documents(uploaded_files):
-    """Process uploaded PDF or text files into document chunks."""
-    if not uploaded_files:
-        st.error("No files uploaded.")
+def process_image(uploaded_image):
+    """Process uploaded image to extract text and create document chunks."""
+    if not uploaded_image:
+        st.error("No image uploaded.")
         return []
     
-    # Clear temporary directory
+    # Save image to temporary file
     temp_dir = tempfile.gettempdir()
-    for file in os.listdir(temp_dir):
-        if file.endswith(('.pdf', '.txt')):
-            os.unlink(os.path.join(temp_dir, file))
+    temp_file_path = os.path.join(temp_dir, "uploaded_image.jpg")
     
-    documents = []
-    for uploaded_file in uploaded_files:
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1], dir=temp_dir) as tmp_file:
-                tmp_file.write(uploaded_file.read())
-                tmp_file_path = tmp_file.name
-            
-            if uploaded_file.name.endswith('.pdf'):
-                loader = PyPDFLoader(tmp_file_path)
-            elif uploaded_file.name.endswith('.txt'):
-                loader = TextLoader(tmp_file_path)
-            else:
-                st.warning(f"Unsupported file type: {uploaded_file.name}")
-                os.unlink(tmp_file_path)
-                continue
-            
-            docs = loader.load()
-            for i, doc in enumerate(docs):
-                doc.metadata['page'] = i + 1
-            documents.extend(docs)
-            os.unlink(tmp_file_path)
-        except Exception as e:
-            st.warning(f"Error processing {uploaded_file.name}: {str(e)}")
-    
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=400,
-        chunk_overlap=80,
-        length_function=len
-    )
-    chunks = text_splitter.split_documents(documents)
-    return chunks
+    try:
+        # Open and save image
+        image = Image.open(uploaded_image)
+        image.save(temp_file_path)
+        
+        # Load captioning model and generate description
+        captioning_model = load_captioning_model()
+        if not captioning_model:
+            return []
+        
+        caption_result = captioning_model(temp_file_path)
+        image_description = caption_result[0]['generated_text'] if caption_result else ""
+        
+        # Clean up temporary file
+        os.unlink(temp_file_path)
+        
+        if not image_description:
+            st.warning("No meaningful content extracted from the image.")
+            return []
+        
+        # Create a document from the image description
+        document = Document(
+            page_content=image_description,
+            metadata={"source": "image_description"}
+        )
+        
+        # Split into chunks
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=200,
+            chunk_overlap=40,
+            length_function=len
+        )
+        chunks = text_splitter.split_documents([document])
+        return chunks
+    except Exception as e:
+        st.error(f"Error processing image: {str(e)}")
+        return []
 
 def create_rag_chain(vector_store):
-    """Create a Retrieval-Augmented Generation (RAG) chain."""
+    """Create a Retrieval-Augmented Generation (RAG) chain for summarization."""
     if vector_store is None:
         st.error("Vector store not initialized.")
         return None
     try:
         retriever = vector_store.as_retriever(
             search_type="similarity_score_threshold",
-            search_kwargs={"k": 5, "score_threshold": 0.3}
+            search_kwargs={"k": 3, "score_threshold": 0.3}
         )
         prompt_template = PromptTemplate(
-            input_variables=["context", "question"],
-            template="Answer the question in 1 sentence based on the context. For author queries, extract the author's name from title pages, bios, or similar sections.\nContext: {context}\nQuestion: {question}\nAnswer: "
+            input_variables=["context"],
+            template="Generate a concise summary (1-2 sentences) of the following image description:\nContext: {context}\nSummary: "
         )
         qa_chain = RetrievalQA.from_chain_type(
             llm=load_llm(),
@@ -136,16 +148,16 @@ def create_rag_chain(vector_store):
         return None
 
 # Streamlit UI
-st.title("Document Q&A")
-st.write("Upload PDF or text files and ask questions about their content.")
+st.title("Image-Based Summary Generator")
+st.write("Upload an image to generate a concise summary based on its content.")
 
-# File uploader
-uploaded_files = st.file_uploader("Upload documents", type=["pdf", "txt"], accept_multiple_files=True)
+# Image uploader
+uploaded_image = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
 
-# Process files only if new files are uploaded
-if uploaded_files and uploaded_files != st.session_state.last_uploaded_files:
-    with st.spinner("Processing documents..."):
-        chunks = process_documents(uploaded_files)
+# Process image only if a new image is uploaded
+if uploaded_image and uploaded_image != st.session_state.last_uploaded_image:
+    with st.spinner("Processing image..."):
+        chunks = process_image(uploaded_image)
         if chunks:
             vector_store = create_vector_store(chunks)
             qa_chain = create_rag_chain(vector_store)
@@ -153,67 +165,40 @@ if uploaded_files and uploaded_files != st.session_state.last_uploaded_files:
                 st.session_state.qa_chain = qa_chain
                 st.session_state.vector_store = vector_store
                 st.session_state.processing_complete = True
-                st.session_state.last_uploaded_files = uploaded_files
-                st.success("Documents processed successfully!")
+                st.session_state.last_uploaded_image = uploaded_image
+                st.success("Image processed successfully!")
             else:
                 st.session_state.processing_complete = False
-                st.error("Failed to create question-answering system.")
+                st.error("Failed to create summarization system.")
         else:
             st.session_state.processing_complete = False
-            st.error("No valid documents processed.")
-elif not uploaded_files:
+            st.error("No valid content extracted from the image.")
+elif not uploaded_image:
     st.session_state.processing_complete = False
-    st.session_state.last_uploaded_files = None
+    st.session_state.last_uploaded_image = None
     st.session_state.qa_chain = None
     st.session_state.vector_store = None
-    st.info("Please upload at least one document.")
+    st.info("Please upload an image.")
 
-# Query input
-query = st.text_input(
-    "Ask a question about the documents (e.g., 'Who is the author?' or 'What is the main topic?'):",
-    value="name of the author",
-    disabled=not st.session_state.processing_complete
-)
-if st.button("Get Answer", disabled=not st.session_state.processing_complete):
-    with st.spinner("Generating answer..."):
+# Generate summary button
+if st.button("Generate Summary", disabled=not st.session_state.processing_complete):
+    with st.spinner("Generating summary..."):
         try:
-            # Filter for author queries
-            if "author" in query.lower():
-                docs_with_scores = st.session_state.vector_store.similarity_search_with_score(
-                    query, k=10, filter=lambda x: x.get('page', float('inf')) <= 5 and any(keyword in x.get('page_content', '').lower() for keyword in ['by', 'author', 'affiliation', 'email'])
-                )
-            else:
-                docs_with_scores = st.session_state.vector_store.similarity_search_with_score(query, k=10)
+            # Use a generic query to trigger summary generation
+            result = st.session_state.qa_chain.invoke({"query": "Summarize the image content"})
+            summary = result["result"].strip()
             
-            result = st.session_state.qa_chain.invoke({"query": query})
-            answer = result["result"].strip()
-            
-            # Dynamic name extraction for author queries
-            if "author" in query.lower():
-                name_pattern = re.compile(r'\b([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)\b')
-                for doc in result["source_documents"]:
-                    if any(keyword in doc.page_content.lower() for keyword in ['by', 'author', 'affiliation', 'email']):
-                        match = name_pattern.search(doc.page_content)
-                        if match and not any(cited in doc.page_content.lower() for cited in ['cite', 'reference', 'et al']):
-                            answer = f"The author of the document is {match.group(1)}."
-                            break
-                else:
-                    answer = "No author name found in the document."
-            
-            st.write("**Answer:**")
-            st.write(answer)
+            st.write("**Summary:**")
+            st.write(summary)
             
             # Debug info for developers
             with st.expander("Debug Information (For Developers)"):
-                if "author" in query.lower():
-                    st.write("**Filtered Early Pages:**")
-                    for doc, score in docs_with_scores[:5]:
-                        st.write(f"- Page: {doc.metadata.get('page', 'N/A')}, Score: {score:.4f}, Content: {doc.page_content[:150]}...")
-                st.write("**Source Documents:**")
+                st.write("**Image Description:**")
                 for doc in result["source_documents"]:
-                    st.write(f"- Page: {doc.metadata.get('page', 'N/A')}, Content: {doc.page_content[:150]}...")
+                    st.write(f"- Content: {doc.page_content}")
                 st.write("**Similarity Scores:**")
-                for doc, score in docs_with_scores[:5]:
-                    st.write(f"- Page: {doc.metadata.get('page', 'N/A')}, Score: {score:.4f}, Content: {doc.page_content[:150]}...")
+                docs_with_scores = st.session_state.vector_store.similarity_search_with_score("summary", k=3)
+                for doc, score in docs_with_scores:
+                    st.write(f"- Content: {doc.page_content[:150]}..., Score: {score:.4f}")
         except Exception as e:
-            st.error(f"Error generating answer: {str(e)}")
+            st.error(f"Error generating summary: {str(e)}")
