@@ -9,19 +9,19 @@ from langchain_huggingface import HuggingFacePipeline, HuggingFaceEmbeddings  # 
 import os  # File system operations
 import tempfile  # Temporary file handling
 
-# Initialize session state to track if documents are processed
+# Initialize session state
 if 'processing_complete' not in st.session_state:
     st.session_state.processing_complete = False
 if 'qa_chain' not in st.session_state:
     st.session_state.qa_chain = None
 
-# Set device to CPU (Streamlit Cloud doesn't support GPU in free tier)
+# Set device to CPU
 device = "cpu"
 st.write(f"Using device: {device}")
 
 # Define model names
-MODEL_NAME = "distilgpt2"  # Lightweight model for text generation
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"  # Lightweight embedding model
+MODEL_NAME = "distilgpt2"
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 @st.cache_resource
 def load_llm():
@@ -35,17 +35,16 @@ def load_llm():
             MODEL_NAME,
             trust_remote_code=True
         )
-        # Configure pipeline for concise, question-driven text generation
         pipe = pipeline(
             "text-generation",
             model=model,
             tokenizer=tokenizer,
-            max_new_tokens=50,  # Shorter output for concise answers
-            temperature=0.6,  # Less randomness for focused responses
-            top_p=0.9,  # Moderate diversity
-            repetition_penalty=1.2,  # Avoid repetition
+            max_new_tokens=50,
+            temperature=0.6,
+            top_p=0.9,
+            repetition_penalty=1.2,
             do_sample=True,
-            top_k=40,  # Slightly reduced for efficiency
+            top_k=40,
         )
         return HuggingFacePipeline(pipeline=pipe)
     except Exception as e:
@@ -131,13 +130,14 @@ def create_rag_chain(vector_store):
     try:
         retriever = vector_store.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": 2}  # Reduced to 2 chunks for faster processing
+            search_kwargs={"k": 2}
         )
-        # Custom prompt template for concise, question-driven responses
-        prompt_template = """Use the following context to answer the question concisely in 1-2 sentences. Focus on clarity and relevance.
-        Context: {context}
-        Question: {question}
-        Answer: """
+        # Define a proper PromptTemplate object
+        prompt_template = PromptTemplate(
+            input_variables=["context", "question"],
+            template="Use the following context to answer the question concisely in 1-2 sentences. Focus on clarity and relevance.\nContext: {context}\nQuestion: {question}\nAnswer: "
+        )
+        # Create RAG chain with the prompt template
         qa_chain = RetrievalQA.from_chain_type(
             llm=load_llm(),
             chain_type="stuff",
@@ -178,7 +178,7 @@ else:
     st.session_state.processing_complete = False
     st.info("Please upload at least one document to proceed.")
 
-# Query input (disabled until processing is complete)
+# Query input
 query = st.text_input(
     "Ask a specific question about the documents (e.g., 'What is the main topic?' or 'Who is mentioned?'):",
     value="What is the main topic of the document?",
