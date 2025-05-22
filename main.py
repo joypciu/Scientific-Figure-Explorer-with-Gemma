@@ -5,6 +5,7 @@ from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFacePipeline, HuggingFaceEmbeddings
 from langchain.prompts import PromptTemplate
+from langchain.chains import RetrievalQA  # Added missing import
 from langchain_core.documents import Document
 from PIL import Image
 import os
@@ -24,8 +25,8 @@ if 'vector_store' not in st.session_state:
 device = "cpu"
 
 # Define model names
-CAPTION_MODEL = "Salesforce/blip-image-captioning-base"  # Image captioning model
-LLM_MODEL_NAME = "facebook/opt-350m"  # CPU-friendly text generator
+CAPTION_MODEL = "Salesforce/blip-image-captioning-base"
+LLM_MODEL_NAME = "facebook/opt-350m"
 EMBEDDING_MODEL_NAME = "sentence-transformers/multi-qa-mpnet-base-dot-v1"
 
 @st.cache_resource
@@ -53,7 +54,7 @@ def load_llm():
             repetition_penalty=1.2,
             do_sample=True,
             top_k=50,
-            device=-1  # Ensure CPU usage
+            device=-1
         )
         return HuggingFacePipeline(pipeline=pipe)
     except Exception as e:
@@ -79,16 +80,13 @@ def process_image(uploaded_image):
         st.error("No image uploaded.")
         return []
     
-    # Save image to temporary file
     temp_dir = tempfile.gettempdir()
     temp_file_path = os.path.join(temp_dir, "uploaded_image.jpg")
     
     try:
-        # Open and save image
         image = Image.open(uploaded_image)
         image.save(temp_file_path)
         
-        # Load captioning model and generate description
         captioning_model = load_captioning_model()
         if not captioning_model:
             return []
@@ -96,20 +94,17 @@ def process_image(uploaded_image):
         caption_result = captioning_model(temp_file_path)
         image_description = caption_result[0]['generated_text'] if caption_result else ""
         
-        # Clean up temporary file
         os.unlink(temp_file_path)
         
         if not image_description:
             st.warning("No meaningful content extracted from the image.")
             return []
         
-        # Create a document from the image description
         document = Document(
             page_content=image_description,
             metadata={"source": "image_description"}
         )
         
-        # Split into chunks
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=200,
             chunk_overlap=40,
@@ -184,14 +179,12 @@ elif not uploaded_image:
 if st.button("Generate Summary", disabled=not st.session_state.processing_complete):
     with st.spinner("Generating summary..."):
         try:
-            # Use a generic query to trigger summary generation
             result = st.session_state.qa_chain.invoke({"query": "Summarize the image content"})
             summary = result["result"].strip()
             
             st.write("**Summary:**")
             st.write(summary)
             
-            # Debug info for developers
             with st.expander("Debug Information (For Developers)"):
                 st.write("**Image Description:**")
                 for doc in result["source_documents"]:
