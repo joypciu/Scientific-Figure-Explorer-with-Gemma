@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.DEBUG, filename='app.log', filemode='a',
 logger = logging.getLogger(__name__)
 
 # Workaround for Streamlit-PyTorch conflict
-os.environ['STREAMLIT_SERVER_FILE_WATCHER_TYPE'] = 'poll'  # Use polling instead of watchdog
+os.environ['STREAMLIT_SERVER_FILE_WATCHER_TYPE'] = 'poll'
 
 # Initialize session state
 if 'processing_complete' not in st.session_state:
@@ -62,7 +62,7 @@ def load_llm():
             "text-generation",
             model=model,
             tokenizer=tokenizer,
-            max_new_tokens=50,
+            max_new_tokens=100,  # Increased to allow longer responses
             temperature=0.7,
             top_p=0.9,
             repetition_penalty=1.2,
@@ -105,7 +105,7 @@ def process_image(uploaded_image):
     temp_file_path = os.path.join(temp_dir, "uploaded_image.jpg")
     
     try:
-        image = Image.open(uploaded_image).resize((512, 512))  # Resize to reduce memory usage
+        image = Image.open(uploaded_image).resize((512, 512))
         image.save(temp_file_path)
         logger.info(f"Image saved to {temp_file_path}")
         
@@ -158,7 +158,7 @@ def create_rag_chain(vector_store):
         )
         prompt_template = PromptTemplate(
             input_variables=["context"],
-            template="Generate a concise summary (1-2 sentences) of the following image description:\nContext: {context}\nSummary: "
+            template="Generate a concise summary (1-2 sentences) based on the following image description:\nContext: {context}\nSummary: "
         )
         qa_chain = RetrievalQA.from_chain_type(
             llm=load_llm(),
@@ -222,11 +222,17 @@ if st.button("Generate Summary", disabled=not st.session_state.processing_comple
     with st.spinner("Generating summary..."):
         logger.info("Generating summary...")
         try:
+            # Ensure context is retrieved and passed correctly
+            context = st.session_state.vector_store.as_retriever().get_relevant_documents("Summarize the image content")
+            if not context:
+                st.error("No relevant context found for summarization.")
+                logger.error("No relevant context found for summarization.")
+                return
             result = st.session_state.qa_chain.invoke({"query": "Summarize the image content"})
             summary = result["result"].strip()
             
             st.write("**Summary:**")
-            st.write(summary)
+            st.write(summary if summary != prompt_template.template else "Failed to generate summary.")
             logger.info(f"Summary generated: {summary}")
             
             with st.expander("Debug Information (For Developers)"):
