@@ -11,11 +11,15 @@ import tempfile  # Temporary file handling
 from langchain.prompts import PromptTemplate  # Import PromptTemplate
 import shutil  # For clearing temporary directory
 
+
+
 # Initialize session state
 if 'processing_complete' not in st.session_state:
     st.session_state.processing_complete = False
 if 'qa_chain' not in st.session_state:
     st.session_state.qa_chain = None
+if 'last_uploaded_files' not in st.session_state:
+    st.session_state.last_uploaded_files = None
 
 # Set device to CPU
 device = "cpu"
@@ -55,10 +59,6 @@ def load_llm():
 def create_vector_store(chunks):
     """
     Create a FAISS vector store from document chunks using embeddings.
-    Args:
-        chunks: List of document chunks
-    Returns:
-        FAISS vector store object
     """
     try:
         embeddings = HuggingFaceEmbeddings(
@@ -77,16 +77,12 @@ def create_vector_store(chunks):
 def process_documents(uploaded_files):
     """
     Process uploaded PDF or text files into document chunks.
-    Args:
-        uploaded_files: List of uploaded files from Streamlit
-    Returns:
-        List of document chunks
     """
     if not uploaded_files:
         st.error("No files uploaded.")
         return []
     
-    # Clear temporary directory to avoid processing old files
+    # Clear temporary directory
     temp_dir = tempfile.gettempdir()
     for file in os.listdir(temp_dir):
         if file.endswith(('.pdf', '.txt')):
@@ -114,8 +110,8 @@ def process_documents(uploaded_files):
             st.warning(f"Error processing {uploaded_file.name}: {str(e)}")
     
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=100,
+        chunk_size=1000,  # Increased for more context
+        chunk_overlap=200,  # Increased for better continuity
         length_function=len
     )
     chunks = text_splitter.split_documents(documents)
@@ -124,19 +120,15 @@ def process_documents(uploaded_files):
 
 def create_rag_chain(vector_store):
     """
-    Create a Retrieval-Augmented Generation (RAG) chain with a custom prompt.
-    Args:
-        vector_store: FAISS vector store for document retrieval
-    Returns:
-        RetrievalQA chain object
+    Create a Retrieval-Augmented Generation (RAG) chain.
     """
     if vector_store is None:
         st.error("Vector store not initialized.")
         return None
     try:
         retriever = vector_store.as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": 3}  # Increased to 3 for better context
+            search_type="similarity_score_threshold",
+            search_kwargs={"k": 3, "score_threshold": 0.5}  # Added threshold for relevance
         )
         prompt_template = PromptTemplate(
             input_variables=["context", "question"],
@@ -161,8 +153,8 @@ st.write("Upload PDF or text files and ask specific questions about their conten
 # File uploader
 uploaded_files = st.file_uploader("Upload documents", type=["pdf", "txt"], accept_multiple_files=True)
 
-# Process files and create RAG chain
-if uploaded_files:
+# Process files only if new files are uploaded
+if uploaded_files and uploaded_files != st.session_state.last_uploaded_files:
     with st.spinner("Processing documents..."):
         chunks = process_documents(uploaded_files)
         if chunks:
@@ -171,6 +163,7 @@ if uploaded_files:
             if qa_chain:
                 st.session_state.qa_chain = qa_chain
                 st.session_state.processing_complete = True
+                st.session_state.last_uploaded_files = uploaded_files
                 st.success("Documents processed and RAG chain created!")
             else:
                 st.session_state.processing_complete = False
@@ -178,8 +171,10 @@ if uploaded_files:
         else:
             st.session_state.processing_complete = False
             st.error("No valid documents processed.")
-else:
+elif not uploaded_files:
     st.session_state.processing_complete = False
+    st.session_state.last_uploaded_files = None
+    st.session_state.qa_chain = None
     st.info("Please upload at least one document to proceed.")
 
 # Query input
@@ -197,9 +192,13 @@ if st.button("Get Answer", disabled=not st.session_state.processing_complete):
             st.write("**Source Documents:**")
             for doc in result["source_documents"]:
                 st.write(f"- {doc.metadata['source']}: {doc.page_content[:200]}...")
-            # Debug: Display retrieved context
             st.write("**Retrieved Context (Debug):**")
             for doc in result["source_documents"]:
                 st.write(f"- {doc.page_content}")
+            # Log similarity scores for debugging
+            st.write("**Similarity Scores (Debug):**")
+            docs_with_scores = st.session_state.qa_chain.retriever.vectorstore.similarity_search_with_score(query, k=3)
+            for doc, score in docs_with_scores:
+                st.write(f"- Score: {score:.4f}, Content: {doc.page_content[:200]}...")
         except Exception as e:
             st.error(f"Error generating answer: {str(e)}")
