@@ -19,56 +19,53 @@ if 'qa_chain' not in st.session_state:
 device = "cpu"
 st.write(f"Using device: {device}")
 
-# Define model names (distilgpt2 is lightweight for CPU)
-MODEL_NAME = "distilgpt2"  # Small language model for text generation
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"  # Small model for text embeddings
+# Define model names
+MODEL_NAME = "distilgpt2"  # Lightweight model for text generation
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"  # Lightweight embedding model
 
-@st.cache_resource  # Cache model to avoid reloading
+@st.cache_resource
 def load_llm():
     """
-    Load the language model and create a text generation pipeline.
+    Load the language model and create a text generation pipeline optimized for question answering.
     Returns a HuggingFacePipeline object for LangChain.
     """
     try:
-        # Load tokenizer and model from Hugging Face
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
         model = AutoModelForCausalLM.from_pretrained(
             MODEL_NAME,
             trust_remote_code=True
         )
-        # Create a pipeline for text generation
+        # Configure pipeline for concise, question-driven text generation
         pipe = pipeline(
             "text-generation",
             model=model,
             tokenizer=tokenizer,
-            max_new_tokens=128,  # Limit output length for CPU efficiency
-            temperature=0.7,  # Control randomness (lower = less random)
-            top_p=0.95,  # Control diversity (nucleus sampling)
-            repetition_penalty=1.15,  # Avoid repetitive text
-            do_sample=True,  # Enable sampling for varied outputs
-            top_k=50,  # Consider top 50 tokens for sampling
+            max_new_tokens=50,  # Shorter output for concise answers
+            temperature=0.6,  # Less randomness for focused responses
+            top_p=0.9,  # Moderate diversity
+            repetition_penalty=1.2,  # Avoid repetition
+            do_sample=True,
+            top_k=40,  # Slightly reduced for efficiency
         )
         return HuggingFacePipeline(pipeline=pipe)
     except Exception as e:
         st.error(f"Error loading model: {str(e)}")
         return None
 
-@st.cache_resource  # Cache vector store to avoid recomputing
+@st.cache_resource
 def create_vector_store(_chunks):
     """
     Create a FAISS vector store from document chunks using embeddings.
     Args:
-        _chunks: List of document chunks (underscore to bypass Streamlit hashing)
+        _chunks: List of document chunks
     Returns:
         FAISS vector store object
     """
     try:
-        # Load embedding model for converting text to vectors
         embeddings = HuggingFaceEmbeddings(
             model_name=EMBEDDING_MODEL_NAME,
             model_kwargs={'device': device}
         )
-        # Create FAISS vector store (in-memory for Streamlit Cloud)
         vector_store = FAISS.from_documents(
             documents=_chunks,
             embedding=embeddings
@@ -93,12 +90,10 @@ def process_documents(uploaded_files):
     documents = []
     for uploaded_file in uploaded_files:
         try:
-            # Save uploaded file to temporary location
             with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp_file:
                 tmp_file.write(uploaded_file.read())
                 tmp_file_path = tmp_file.name
             
-            # Load file based on type
             if uploaded_file.name.endswith('.pdf'):
                 loader = PyPDFLoader(tmp_file_path)
             elif uploaded_file.name.endswith('.txt'):
@@ -108,16 +103,14 @@ def process_documents(uploaded_files):
                 os.unlink(tmp_file_path)
                 continue
             
-            # Add loaded documents to list
             documents.extend(loader.load())
-            os.unlink(tmp_file_path)  # Clean up temporary file
+            os.unlink(tmp_file_path)
         except Exception as e:
             st.warning(f"Error processing {uploaded_file.name}: {str(e)}")
     
-    # Split documents into smaller chunks for processing
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,  # Small chunks for CPU efficiency
-        chunk_overlap=100,  # Overlap to maintain context
+        chunk_size=500,
+        chunk_overlap=100,
         length_function=len
     )
     chunks = text_splitter.split_documents(documents)
@@ -126,7 +119,7 @@ def process_documents(uploaded_files):
 
 def create_rag_chain(vector_store):
     """
-    Create a Retrieval-Augmented Generation (RAG) chain.
+    Create a Retrieval-Augmented Generation (RAG) chain with a custom prompt for concise answers.
     Args:
         vector_store: FAISS vector store for document retrieval
     Returns:
@@ -136,17 +129,21 @@ def create_rag_chain(vector_store):
         st.error("Vector store not initialized.")
         return None
     try:
-        # Create retriever to find relevant document chunks
         retriever = vector_store.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": 3}  # Return top 3 relevant chunks
+            search_kwargs={"k": 2}  # Reduced to 2 chunks for faster processing
         )
-        # Create RAG chain combining retriever and LLM
+        # Custom prompt template for concise, question-driven responses
+        prompt_template = """Use the following context to answer the question concisely in 1-2 sentences. Focus on clarity and relevance.
+        Context: {context}
+        Question: {question}
+        Answer: """
         qa_chain = RetrievalQA.from_chain_type(
             llm=load_llm(),
-            chain_type="stuff",  # Combine retrieved chunks into context
+            chain_type="stuff",
             retriever=retriever,
-            return_source_documents=True  # Include source documents in output
+            return_source_documents=True,
+            chain_type_kwargs={"prompt": prompt_template}
         )
         return qa_chain
     except Exception as e:
@@ -155,7 +152,7 @@ def create_rag_chain(vector_store):
 
 # Streamlit UI
 st.title("Document Q&A with RAG")
-st.write("Upload PDF or text files and ask questions about their content.")
+st.write("Upload PDF or text files and ask specific questions about their content.")
 
 # File uploader
 uploaded_files = st.file_uploader("Upload documents", type=["pdf", "txt"], accept_multiple_files=True)
@@ -183,8 +180,8 @@ else:
 
 # Query input (disabled until processing is complete)
 query = st.text_input(
-    "Ask a question about the documents:",
-    value="Summarize the document",
+    "Ask a specific question about the documents (e.g., 'What is the main topic?' or 'Who is mentioned?'):",
+    value="What is the main topic of the document?",
     disabled=not st.session_state.processing_complete
 )
 if st.button("Get Answer", disabled=not st.session_state.processing_complete):
@@ -192,7 +189,7 @@ if st.button("Get Answer", disabled=not st.session_state.processing_complete):
         try:
             result = st.session_state.qa_chain.invoke({"query": query})
             st.write("**Answer:**")
-            st.write(result["result"])
+            st.write(result["result"].strip())
             st.write("**Source Documents:**")
             for doc in result["source_documents"]:
                 st.write(f"- {doc.metadata['source']}: {doc.page_content[:200]}...")
