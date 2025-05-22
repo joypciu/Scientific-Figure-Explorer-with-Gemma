@@ -8,6 +8,7 @@ from langchain.chains import RetrievalQA  # RAG chain for question answering
 from langchain_huggingface import HuggingFacePipeline, HuggingFaceEmbeddings  # LangChain integration with Hugging Face
 import os  # File system operations
 import tempfile  # Temporary file handling
+from langchain.prompts import PromptTemplate  # Import PromptTemplate
 
 # Initialize session state
 if 'processing_complete' not in st.session_state:
