@@ -12,7 +12,6 @@ from langchain.prompts import PromptTemplate  # Import PromptTemplate
 import shutil  # For clearing temporary directory
 
 
-
 # Initialize session state
 if 'processing_complete' not in st.session_state:
     st.session_state.processing_complete = False
@@ -110,8 +109,8 @@ def process_documents(uploaded_files):
             st.warning(f"Error processing {uploaded_file.name}: {str(e)}")
     
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,  # Increased for more context
-        chunk_overlap=200,  # Increased for better continuity
+        chunk_size=500,  # Reduced for more focused chunks
+        chunk_overlap=100,  # Reduced for efficiency
         length_function=len
     )
     chunks = text_splitter.split_documents(documents)
@@ -128,11 +127,11 @@ def create_rag_chain(vector_store):
     try:
         retriever = vector_store.as_retriever(
             search_type="similarity_score_threshold",
-            search_kwargs={"k": 3, "score_threshold": 0.5}  # Added threshold for relevance
+            search_kwargs={"k": 3, "score_threshold": 0.7}  # Stricter threshold
         )
         prompt_template = PromptTemplate(
             input_variables=["context", "question"],
-            template="Use the following context to answer the question concisely in 1-2 sentences. Focus on clarity and relevance.\nContext: {context}\nQuestion: {question}\nAnswer: "
+            template="Use the following context to answer the question concisely in 1-2 sentences. Focus on clarity and relevance. For author-related questions, prioritize information from title pages or copyright notices.\nContext: {context}\nQuestion: {question}\nAnswer: "
         )
         qa_chain = RetrievalQA.from_chain_type(
             llm=load_llm(),
@@ -179,8 +178,8 @@ elif not uploaded_files:
 
 # Query input
 query = st.text_input(
-    "Ask a specific question about the documents (e.g., 'What is the main topic?' or 'Who is mentioned?'):",
-    value="What is the main topic of the document?",
+    "Ask a specific question about the documents (e.g., 'What is the main topic?' or 'Who is the author?'):",
+    value="name of the author",
     disabled=not st.session_state.processing_complete
 )
 if st.button("Get Answer", disabled=not st.session_state.processing_complete):
@@ -197,8 +196,13 @@ if st.button("Get Answer", disabled=not st.session_state.processing_complete):
                 st.write(f"- {doc.page_content}")
             # Log similarity scores for debugging
             st.write("**Similarity Scores (Debug):**")
-            docs_with_scores = st.session_state.qa_chain.retriever.vectorstore.similarity_search_with_score(query, k=3)
+            docs_with_scores = st.session_state.qa_chain.retriever.vectorstore.similarity_search_with_score(query, k=5)  # Top 5 for debugging
             for doc, score in docs_with_scores:
                 st.write(f"- Score: {score:.4f}, Content: {doc.page_content[:200]}...")
+            # Fallback: Check for author keywords
+            st.write("**Fallback Check (Debug):**")
+            for doc in result["source_documents"]:
+                if "by" in doc.page_content.lower() or "author" in doc.page_content.lower() or "copyright" in doc.page_content.lower():
+                    st.write(f"- Potential author info: {doc.page_content[:200]}...")
         except Exception as e:
             st.error(f"Error generating answer: {str(e)}")
