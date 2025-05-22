@@ -9,6 +9,7 @@ from langchain_huggingface import HuggingFacePipeline, HuggingFaceEmbeddings  # 
 import os  # File system operations
 import tempfile  # Temporary file handling
 from langchain.prompts import PromptTemplate  # Import PromptTemplate
+import shutil  # For clearing temporary directory
 
 # Initialize session state
 if 'processing_complete' not in st.session_state:
@@ -27,8 +28,7 @@ EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 @st.cache_resource
 def load_llm():
     """
-    Load the language model and create a text generation pipeline optimized for question answering.
-    Returns a HuggingFacePipeline object for LangChain.
+    Load the language model and create a text generation pipeline.
     """
     try:
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
@@ -52,12 +52,11 @@ def load_llm():
         st.error(f"Error loading model: {str(e)}")
         return None
 
-@st.cache_resource
-def create_vector_store(_chunks):
+def create_vector_store(chunks):
     """
     Create a FAISS vector store from document chunks using embeddings.
     Args:
-        _chunks: List of document chunks
+        chunks: List of document chunks
     Returns:
         FAISS vector store object
     """
@@ -67,7 +66,7 @@ def create_vector_store(_chunks):
             model_kwargs={'device': device}
         )
         vector_store = FAISS.from_documents(
-            documents=_chunks,
+            documents=chunks,
             embedding=embeddings
         )
         return vector_store
@@ -87,10 +86,16 @@ def process_documents(uploaded_files):
         st.error("No files uploaded.")
         return []
     
+    # Clear temporary directory to avoid processing old files
+    temp_dir = tempfile.gettempdir()
+    for file in os.listdir(temp_dir):
+        if file.endswith(('.pdf', '.txt')):
+            os.unlink(os.path.join(temp_dir, file))
+    
     documents = []
     for uploaded_file in uploaded_files:
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp_file:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1], dir=temp_dir) as tmp_file:
                 tmp_file.write(uploaded_file.read())
                 tmp_file_path = tmp_file.name
             
@@ -119,7 +124,7 @@ def process_documents(uploaded_files):
 
 def create_rag_chain(vector_store):
     """
-    Create a Retrieval-Augmented Generation (RAG) chain with a custom prompt for concise answers.
+    Create a Retrieval-Augmented Generation (RAG) chain with a custom prompt.
     Args:
         vector_store: FAISS vector store for document retrieval
     Returns:
@@ -131,14 +136,12 @@ def create_rag_chain(vector_store):
     try:
         retriever = vector_store.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": 2}
+            search_kwargs={"k": 3}  # Increased to 3 for better context
         )
-        # Define a proper PromptTemplate object
         prompt_template = PromptTemplate(
             input_variables=["context", "question"],
             template="Use the following context to answer the question concisely in 1-2 sentences. Focus on clarity and relevance.\nContext: {context}\nQuestion: {question}\nAnswer: "
         )
-        # Create RAG chain with the prompt template
         qa_chain = RetrievalQA.from_chain_type(
             llm=load_llm(),
             chain_type="stuff",
@@ -194,5 +197,9 @@ if st.button("Get Answer", disabled=not st.session_state.processing_complete):
             st.write("**Source Documents:**")
             for doc in result["source_documents"]:
                 st.write(f"- {doc.metadata['source']}: {doc.page_content[:200]}...")
+            # Debug: Display retrieved context
+            st.write("**Retrieved Context (Debug):**")
+            for doc in result["source_documents"]:
+                st.write(f"- {doc.page_content}")
         except Exception as e:
             st.error(f"Error generating answer: {str(e)}")
