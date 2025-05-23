@@ -91,7 +91,7 @@ def main():
         st.markdown("""
         This RAG system helps researchers find relevant scientific figures and visualizations using:
         - **Semantic Search**: Find figures by meaning, not just keywords
-        - **AI Analysis**: Get insights powered by Google Gemma
+        - **AI Analysis**: Get insights powered by Gemma 3N via OpenRouter
         - **Multi-domain Coverage**: ML, CV, NLP, and more
         """)
         
@@ -203,7 +203,7 @@ def main():
         st.markdown("- LangChain & FAISS")
     with col2:
         st.markdown("🤖 **Powered by:**")
-        st.markdown("- Google GenAI (Gemma)")
+        st.markdown("- Gemma 3N via OpenRouter")
     with col3:
         st.markdown("🚀 **Deployed on:**")
         st.markdown("- Streamlit Cloud")

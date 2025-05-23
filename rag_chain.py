@@ -1,7 +1,6 @@
 # rag_chain.py
 import streamlit as st
-from google import genai
-from google.genai import types
+from openai import OpenAI
 import os
 import logging
 
@@ -13,25 +12,37 @@ class ScientificFigureRAG:
     def __init__(self, embedding_manager):
         self.embedding_manager = embedding_manager
         
-        # Initialize Google GenAI client
+        # Initialize OpenRouter client
         try:
-            gemini_api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+            openrouter_api_key = st.secrets.get("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+            site_url = st.secrets.get("SITE_URL") or os.getenv("SITE_URL", "https://localhost:8501")
+            site_name = st.secrets.get("SITE_NAME") or os.getenv("SITE_NAME", "Scientific Figure Explorer")
             
-            if not gemini_api_key:
-                st.error("GEMINI_API_KEY not found. Please set it in Streamlit secrets.")
-                logger.error("GEMINI_API_KEY not found.")
+            if not openrouter_api_key:
+                st.error("OPENROUTER_API_KEY not found. Please set it in Streamlit secrets.")
+                logger.error("OPENROUTER_API_KEY not found.")
                 st.stop()
                 
-            self.client = genai.Client(api_key=gemini_api_key)
-            logger.info("Google GenAI client initialized.")
+            self.client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=openrouter_api_key,
+            )
+            
+            # Store headers for requests
+            self.extra_headers = {
+                "HTTP-Referer": site_url,
+                "X-Title": site_name,
+            }
+            
+            logger.info("OpenRouter client initialized.")
             
         except Exception as e:
-            logger.error(f"Error initializing Google GenAI: {str(e)}")
-            st.error(f"Error initializing Google GenAI: {str(e)}")
+            logger.error(f"Error initializing OpenRouter: {str(e)}")
+            st.error(f"Error initializing OpenRouter: {str(e)}")
             st.stop()
     
     def query_figures(self, query):
-        """Query the RAG system using Google GenAI"""
+        """Query the RAG system using OpenRouter's Gemma 3N model"""
         try:
             # Get similar figures
             similar_figures = self.embedding_manager.search_similar_figures(query, k=5)
@@ -46,9 +57,8 @@ class ScientificFigureRAG:
                 context += f"Keywords: {', '.join(doc.metadata['keywords'])}\n"
                 context += "---\n"
             
-            # Create prompt for Gemma
-            prompt = f"""
-You are a scientific research assistant helping researchers find relevant figures and visualizations.
+            # Create prompt for Gemma 3N
+            prompt = f"""You are a scientific research assistant helping researchers find relevant figures and visualizations.
 
 Based on the following retrieved scientific figures:
 {context}
@@ -68,23 +78,24 @@ Provide a structured response with:
 - Suggest specific ways these figures could be useful for research
 - Mention potential research directions or applications
 
-Keep the response concise, scientific, and research-focused. Use markdown formatting for better readability.
-"""
+Keep the response concise, scientific, and research-focused. Use markdown formatting for better readability."""
 
-            # Generate response using Gemma
-            config = types.GenerateContentConfig(
-                max_output_tokens=500,
+            # Generate response using Gemma 3N via OpenRouter
+            completion = self.client.chat.completions.create(
+                extra_headers=self.extra_headers,
+                extra_body={},
+                model="google/gemma-3n-e4b-it:free",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                max_tokens=500,
                 temperature=0.3
             )
             
-            response = self.client.models.generate_content_stream(
-                model="gemma-3-27b-it",
-                contents=[prompt],
-                config=config
-            )
-            
-            # Collect the streamed response
-            ai_response = "".join(chunk.text for chunk in response if chunk.text)
+            ai_response = completion.choices[0].message.content
             logger.info(f"AI response generated: {ai_response[:100]}...")
             
             return ai_response, similar_figures

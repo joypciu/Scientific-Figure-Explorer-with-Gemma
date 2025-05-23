@@ -12,7 +12,7 @@ A RAG-powered system for discovering relevant scientific figures using Google Ge
 
 ## Live Demo
 
-🌐 [Try it on Streamlit Cloud](https://joy-sfe.streamlit.app/)
+🌐 [Try it on Streamlit Cloud](your-streamlit-url)
 
 ## Local Setup
 
